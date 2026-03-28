@@ -1,8 +1,21 @@
-const CACHE = 'dayflow-v2';
-const ASSETS = ['./', './index.html', './manifest.json'];
+const CACHE = 'dayflow-v3';
+const BASE = self.registration.scope; // e.g. https://user.github.io/dayflow/
+const ASSETS = [
+  BASE,
+  BASE + 'index.html',
+  BASE + 'manifest.json',
+  BASE + 'icon-192.png',
+  BASE + 'icon-512.png',
+  BASE + 'sw.js',
+];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+  e.waitUntil(
+    caches.open(CACHE).then(c => {
+      // Add each asset individually so one failure doesn't block the rest
+      return Promise.allSettled(ASSETS.map(url => c.add(url)));
+    })
+  );
   self.skipWaiting();
 });
 
@@ -14,8 +27,28 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  // Always serve index.html for navigation requests (handles offline app open)
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      caches.match(BASE + 'index.html').then(cached => {
+        return cached || fetch(e.request).catch(() => caches.match(BASE + 'index.html'));
+      })
+    );
+    return;
+  }
+  // Cache-first for all other assets
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request))
+    caches.match(e.request).then(cached => {
+      return cached || fetch(e.request).then(res => {
+        // Cache new successful responses
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(BASE + 'index.html'));
+    })
   );
 });
 
